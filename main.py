@@ -1,4 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 import asyncio

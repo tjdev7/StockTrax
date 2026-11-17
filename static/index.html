@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Tracker Dashboard</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f5f7fa; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: #2c3e50; display: flex; align-items: center; gap: 10px; }
+        .status { font-size: 0.8rem; color: #27ae60; }
+        .add-section { display: flex; gap: 10px; margin: 20px 0; }
+        input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 6px; }
+        button { padding: 10px 20px; background: #3498db; color: white; border: none; border-radius: 6px; cursor: pointer; }
+        button:hover { background: #2980b9; }
+        button.delete { background: #e74c3c; padding: 5px 10px; font-size: 0.8rem; }
+        button.delete:hover { background: #c0392b; }
+        .watchlist { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+        .watchlist .badge { background: #ecf0f1; padding: 5px 12px; border-radius: 20px; display: flex; align-items: center; gap: 8px; }
+        .prices-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 15px; }
+        .price-card { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); text-align: center; transition: 0.2s; }
+        .price-card .symbol { font-weight: 600; color: #2c3e50; }
+        .price-card .price { font-size: 1.8rem; font-weight: 300; color: #2c3e50; margin: 8px 0; }
+        .price-card .timestamp { font-size: 0.7rem; color: #95a5a6; }
+        .price-card .connected { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+        .price-card .connected.on { background: #27ae60; }
+        .price-card .connected.off { background: #e74c3c; animation: blink 1s infinite; }
+        @keyframes blink { 50% { opacity: 0.2; } }
+        .error-msg { color: #e74c3c; margin-top: 10px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>📈 Stock Tracker <span class="status" id="status">● Online</span></h1>
+
+    <div class="add-section">
+        <input type="text" id="symbolInput" placeholder="Enter symbol (e.g. AAPL)" />
+        <button onclick="addStock()">Add</button>
+    </div>
+
+    <div class="watchlist" id="watchlist"></div>
+    <div id="errorMsg" class="error-msg"></div>
+    <div class="prices-grid" id="pricesGrid"></div>
+</div>
+
+<script>
+    // ---------- State ----------
+    const connections = {};   // symbol -> WebSocket
+    const priceElements = {}; // symbol -> DOM element for price
+    let watchlist = [];
+
+    // ---------- Helpers ----------
+    function showError(msg) {
+        document.getElementById('errorMsg').innerText = msg;
+        setTimeout(() => document.getElementById('errorMsg').innerText = '', 5000);
+    }
+
+    // ---------- WebSocket Manager ----------
+    function connectWebSocket(symbol) {
+        if (connections[symbol]) {
+            connections[symbol].close();
+            delete connections[symbol];
+        }
+
+        const ws = new WebSocket(`ws://${window.location.host}/ws/${symbol}`);
+        connections[symbol] = ws;
+
+        // Update connection indicator
+        const indicator = document.getElementById(`indicator-${symbol}`);
+        if (indicator) indicator.className = 'connected on';
+
+        ws.onmessage = (event) => {
+            const price = parseFloat(event.data).toFixed(2);
+            const priceEl = document.getElementById(`price-${symbol}`);
+            if (priceEl) priceEl.innerText = price;
+            // Update timestamp
+            const ts = document.getElementById(`ts-${symbol}`);
+            if (ts) ts.innerText = new Date().toLocaleTimeString();
+        };
+
+        ws.onerror = () => {
+            if (indicator) indicator.className = 'connected off';
+            showError(`WebSocket error for ${symbol} – reconnecting...`);
+        };
+
+        ws.onclose = () => {
+            if (indicator) indicator.className = 'connected off';
+            // Auto‑reconnect after 3 seconds
+            setTimeout(() => {
+                if (watchlist.includes(symbol)) {
+                    connectWebSocket(symbol);
+                }
+            }, 3000);
+        };
+    }
+
+    // ---------- UI Rendering ----------
+    function renderWatchlist() {
+        const container = document.getElementById('watchlist');
+        container.innerHTML = watchlist.map(sym =>
+            `<span class="badge">
+                ${sym}
+                <button class="delete" onclick="removeStock('${sym}')">✕</button>
+            </span>`
+        ).join('');
+    }
+
+    function renderPrices() {
+        const grid = document.getElementById('pricesGrid');
+        if (watchlist.length === 0) {
+            grid.innerHTML = '<p style="color:#95a5a6;">No stocks in watchlist. Add one above!</p>';
+            return;
+        }
+
+        grid.innerHTML = watchlist.map(sym => {
+            priceElements[sym] = `price-${sym}`;
+            return `
+                <div class="price-card" id="card-${sym}">
+                    <div class="symbol">
+                        <span class="connected on" id="indicator-${sym}"></span>
+                        ${sym}
+                    </div>
+                    <div class="price" id="price-${sym}">—</div>
+                    <div class="timestamp" id="ts-${sym}">waiting...</div>
+                </div>
+            `;
+        }).join('');
+
+        // Establish WebSocket for each symbol
+        watchlist.forEach(sym => connectWebSocket(sym));
+    }
+
+    // ---------- API Calls ----------
+    async function loadWatchlist() {
+        try {
+            const res = await fetch('/stocks');
+            if (!res.ok) throw new Error('Failed to fetch watchlist');
+            const data = await res.json();
+            watchlist = data.map(s => s.symbol);
+            renderWatchlist();
+            renderPrices();
+        } catch (err) {
+            showError('Could not load watchlist: ' + err.message);
+        }
+    }
+
+    async function addStock() {
+        const input = document.getElementById('symbolInput');
+        const symbol = input.value.trim().toUpperCase();
+        if (!symbol) return;
+        input.value = '';
+        try {
+            const res = await fetch('/stocks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbol })
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || 'Failed to add');
+            }
+            await loadWatchlist();
+        } catch (err) {
+            showError(err.message);
+        }
+    }
+
+    async function removeStock(symbol) {
+        try {
+            const res = await fetch(`/stocks/${symbol}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Failed to remove');
+            // Close WebSocket
+            if (connections[symbol]) {
+                connections[symbol].close();
+                delete connections[symbol];
+            }
+            await loadWatchlist();
+        } catch (err) {
+            showError(err.message);
+        }
+    }
+
+    // ---------- Initial Load ----------
+    loadWatchlist();
+
+    // Optional: refresh watchlist every 60 seconds (in case of external changes)
+    setInterval(loadWatchlist, 60000);
+</script>
+</body>
+</html>
